@@ -123,6 +123,7 @@ class BesenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._ble_unsub: list[CALLBACK_TYPE] = []
         self._ble_last_try: float | None = None
         self._watchdog: CALLBACK_TYPE | None = None
+        self._sweep: CALLBACK_TYPE | None = None
         self._online = False
         self._unlocked = True
         self._last_frame: float | None = None
@@ -203,10 +204,10 @@ class BesenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_shutdown(self) -> None:
         """Cancel timers and stop touching Home Assistant."""
-        for cancel in (self._watchdog, self._ble_retry, *self._ble_unsub):
+        for cancel in (self._watchdog, self._ble_retry, self._sweep, *self._ble_unsub):
             if cancel is not None:
                 cancel()
-        self._watchdog = self._ble_retry = None
+        self._watchdog = self._ble_retry = self._sweep = None
         self._ble_unsub.clear()
         self._transport = None
         # Cleared first so a link dropping from here on schedules nothing.
@@ -359,9 +360,16 @@ class BesenCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._sweep_done:
             return
         self._sweep_done = True
-        async_call_later(
-            self.hass, SETTINGS_SWEEP_DELAY, lambda _now: self.async_request_settings()
+        self._sweep = async_call_later(
+            self.hass, SETTINGS_SWEEP_DELAY, self._async_settings_sweep
         )
+
+    @callback
+    def _async_settings_sweep(self, _now: datetime) -> None:
+        # A method, not a lambda: Home Assistant runs an undecorated callable
+        # in a worker thread, and sending must happen on the event loop.
+        self._sweep = None
+        self.async_request_settings()
 
     def _refresh_device_registry(self) -> None:
         """Write the charger's self-description onto the device entry.
