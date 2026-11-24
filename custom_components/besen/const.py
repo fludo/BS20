@@ -27,6 +27,10 @@ OFFLINE_TIMEOUT: Final = 90
 #: Advertising name is this prefix plus the last two bytes of the serial.
 BLE_NAME_PREFIX: Final = "ACP#EVSE"
 BLE_CONNECT_TIMEOUT: Final = 20
+#: Connection attempts per advertisement. BlueZ forgets an unpaired device as
+#: soon as a connection to it fails, so later attempts in the same run only
+#: wait for it to reappear; the next advertisement starts a fresh attempt.
+BLE_CONNECT_ATTEMPTS: Final = 1
 
 #: Write/notify pairs that carry the protocol, in priority order. A BS20 uses
 #: FFE9 to write and FFE4 to listen; the rest are the conventions used by other

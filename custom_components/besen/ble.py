@@ -23,6 +23,7 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 
 from .const import (
     BLE_CHARACTERISTIC_PAIRS,
+    BLE_CONNECT_ATTEMPTS,
     BLE_CONNECT_TIMEOUT,
     BLE_NAME_PREFIX,
 )
@@ -309,22 +310,43 @@ class BesenBleTransport:
             # No ble_device_callback: bleak-retry-connector 4.x ignores it, and
             # Home Assistant's client resolves the address to whichever adapter
             # currently sees the charger at connect time.
+            #
+            # One attempt: once it fails BlueZ drops the charger, and the
+            # connector's further attempts spend a minute reporting "out of
+            # connection slots" while the advertisements that could have
+            # started a real attempt go unused. The outer timeout also caps the
+            # retries the connector makes regardless, on "no backend" errors.
             try:
-                client = await establish_connection(
-                    BleakClientWithServiceCache,
-                    info.device,
-                    self.name,
-                    self._handle_disconnect,
-                    timeout=BLE_CONNECT_TIMEOUT,
-                )
+                async with asyncio.timeout(BLE_CONNECT_TIMEOUT + 5):
+                    client = await establish_connection(
+                        BleakClientWithServiceCache,
+                        info.device,
+                        self.name,
+                        self._handle_disconnect,
+                        max_attempts=BLE_CONNECT_ATTEMPTS,
+                        timeout=BLE_CONNECT_TIMEOUT,
+                    )
             except Exception as err:  # noqa: BLE001 - bleak raises broadly
                 # Nothing to clear on "failed to discover services": bleak only
                 # waits for discovery when it has no cached services, and the
                 # connector clears its cache itself on the errors a stale one
                 # causes.
-                self.last_error = f"{type(err).__name__}: {err}" if str(err) else type(err).__name__
+                if isinstance(err.__cause__, TimeoutError):
+                    self.last_error = (
+                        f"no answer to the connection request within "
+                        f"{BLE_CONNECT_TIMEOUT} seconds"
+                    )
+                elif isinstance(err, TimeoutError):
+                    self.last_error = (
+                        "the adapter lost sight of the charger during the attempt"
+                    )
+                else:
+                    self.last_error = (
+                        f"{type(err).__name__}: {err}" if str(err) else type(err).__name__
+                    )
                 _LOGGER.warning(
-                    "Could not connect to %s at rssi %s: %s",
+                    "Could not connect to %s at rssi %s: %s; trying again on its "
+                    "next advertisement",
                     self.name,
                     info.rssi,
                     self.last_error,
