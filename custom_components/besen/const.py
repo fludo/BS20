@@ -31,6 +31,15 @@ BLE_CONNECT_TIMEOUT: Final = 20
 #: soon as a connection to it fails, so later attempts in the same run only
 #: wait for it to reappear; the next advertisement starts a fresh attempt.
 BLE_CONNECT_ATTEMPTS: Final = 1
+#: Connection parameters loaded for the charger on a local adapter, in place of
+#: Home Assistant's: a fixed 7.5 ms interval while connecting, then 8.75 to
+#: 11.25 ms. The charger dropped those links during service discovery, while a
+#: phone, which connects at 30 to 50 ms, never loses it. Intervals are in units
+#: of 1.25 ms, the supervision timeout in units of 10 ms (10 s, as before).
+BLE_CONN_MIN_INTERVAL: Final = 24
+BLE_CONN_MAX_INTERVAL: Final = 40
+BLE_CONN_LATENCY: Final = 0
+BLE_CONN_SUPERVISION_TIMEOUT: Final = 1000
 
 #: Write/notify pairs that carry the protocol, in priority order. A BS20 uses
 #: FFE9 to write and FFE4 to listen; the rest are the conventions used by other
