@@ -40,7 +40,11 @@ def _bluetooth_report(hass: HomeAssistant, entry: BesenConfigEntry) -> dict[str,
 
     try:
         from homeassistant.components import bluetooth  # noqa: PLC0415
-        from .ble import BLE_NAME_PREFIX, ble_name_for  # noqa: PLC0415
+        from .ble import (  # noqa: PLC0415
+            BLE_NAME_PREFIX,
+            ble_name_for,
+            conn_params_override_active,
+        )
     except ImportError as err:
         report["error"] = f"bluetooth support unavailable: {err}"
         return report
@@ -65,6 +69,7 @@ def _bluetooth_report(hass: HomeAssistant, entry: BesenConfigEntry) -> dict[str,
         report["bytes_received"] = transport.bytes_received
         report["last_write_error"] = transport.last_write_error
         report["connection_attempts"] = transport.attempts
+        report["phone_like_connection_parameters"] = conn_params_override_active()
         report["last_error"] = transport.last_error
         report["rssi_at_last_attempt"] = transport.last_rssi
         # How stale the newest sighting is says more than whether one exists.

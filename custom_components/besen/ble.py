@@ -23,6 +23,10 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 
 from .const import (
     BLE_CHARACTERISTIC_PAIRS,
+    BLE_CONN_LATENCY,
+    BLE_CONN_MAX_INTERVAL,
+    BLE_CONN_MIN_INTERVAL,
+    BLE_CONN_SUPERVISION_TIMEOUT,
     BLE_CONNECT_ATTEMPTS,
     BLE_CONNECT_TIMEOUT,
     BLE_NAME_PREFIX,
@@ -50,6 +54,100 @@ def _reported_mtu(client: BleakClient) -> int | None:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         return getattr(client, "mtu_size", None)
+
+
+#: Chargers whose connections use BLE_CONN_* instead of Home Assistant's
+#: parameters, by upper-case address.
+_PHONE_LIKE_ADDRESSES: set[str] = set()
+#: Whether the override is in place: None until first tried.
+_conn_params_override: bool | None = None
+
+
+def conn_params_override_active() -> bool:
+    """Whether connections to chargers use BLE_CONN_* parameters."""
+    return bool(_conn_params_override)
+
+
+def _install_conn_params_override() -> bool:
+    """Make Home Assistant connect to the chargers at a phone's pace.
+
+    Before every connection through a local adapter, habluetooth loads a fixed
+    7.5 ms interval for the device, then 8.75 to 11.25 ms once connected, and
+    offers no way to choose otherwise. This replaces its private
+    ``_load_conn_params`` for the addresses in ``_PHONE_LIKE_ADDRESSES`` only.
+    Anything unexpected, now or after an update, leaves Home Assistant's
+    behaviour in place.
+    """
+    global _conn_params_override  # noqa: PLW0603 - installed once per process
+    if _conn_params_override is not None:
+        return _conn_params_override
+    _conn_params_override = False
+    try:
+        from habluetooth import get_manager  # noqa: PLC0415
+        from habluetooth import wrappers  # noqa: PLC0415
+
+        client_cls = wrappers.HaBleakClientWrapper
+        original = client_cls._load_conn_params  # noqa: SLF001
+        address_type = wrappers._get_device_address_type  # noqa: SLF001
+    except (ImportError, AttributeError) as err:
+        _LOGGER.info(
+            "Cannot set Bluetooth connection parameters on this Home Assistant "
+            "version (%s); using its defaults",
+            err,
+        )
+        return False
+
+    def _load_conn_params(
+        self: object,
+        scanner: object,
+        device: object,
+        params: object,
+        debug_logging: bool,
+        description: str,
+    ) -> None:
+        address = getattr(device, "address", "")
+        if address.upper() not in _PHONE_LIKE_ADDRESSES:
+            original(self, scanner, device, params, debug_logging, description)
+            return
+        try:
+            # None for a proxy, which picks its own parameters: Home
+            # Assistant loads nothing for those either.
+            if (adapter_idx := scanner.adapter_idx) is None:  # type: ignore[attr-defined]
+                return
+            if (mgmt := get_manager().get_bluez_mgmt_ctl()) is None:
+                return
+            sent = mgmt.load_conn_params_explicit(
+                adapter_idx,
+                address,
+                address_type(device),
+                BLE_CONN_MIN_INTERVAL,
+                BLE_CONN_MAX_INTERVAL,
+                BLE_CONN_LATENCY,
+                BLE_CONN_SUPERVISION_TIMEOUT,
+            )
+        except Exception as err:  # noqa: BLE001 - never block a connection
+            _LOGGER.warning(
+                "Could not set connection parameters for %s (%s); using Home "
+                "Assistant's",
+                description,
+                err,
+            )
+            original(self, scanner, device, params, debug_logging, description)
+            return
+        _LOGGER.debug(
+            "%s: %s connection parameters in place of %s: interval "
+            "%.2f-%.2f ms, supervision timeout %d ms",
+            description,
+            "Loaded" if sent else "Could not load",
+            params,
+            BLE_CONN_MIN_INTERVAL * 1.25,
+            BLE_CONN_MAX_INTERVAL * 1.25,
+            BLE_CONN_SUPERVISION_TIMEOUT * 10,
+        )
+
+    client_cls._load_conn_params = _load_conn_params  # noqa: SLF001
+    _conn_params_override = True
+    return True
 
 
 def _short_uuid(uuid: str) -> str:
@@ -306,6 +404,8 @@ class BesenBleTransport:
             self.attempts += 1
             self.last_address = info.address
             self.last_rssi = info.rssi
+            if _install_conn_params_override():
+                _PHONE_LIKE_ADDRESSES.add(info.address.upper())
             _LOGGER.debug("Connecting to %s (%s), rssi %s", self.name, info.address, info.rssi)
             # No ble_device_callback: bleak-retry-connector 4.x ignores it, and
             # Home Assistant's client resolves the address to whichever adapter
